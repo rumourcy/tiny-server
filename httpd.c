@@ -2,12 +2,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/stat.h>
+
+#define SERVER_STRING "Server: trierbo/1.0.0\r\n"
 
 void error_die(const char*);
 int startup(u_short*);
 int get_line(int sock, char* buf, int size);
+void unimplemented(int);
+void not_found(int);
+void serve_file(int, const char*);
+void execute_cgi(int, const char*, const char*, const char*);
+void accept_request(int);
 
 /**
  * 异常退出函数
@@ -94,6 +103,128 @@ int get_line(int sock, char* buf, int size) {
   }
   buf[i] = '\0';
   return i;
+}
+
+/**
+ * 通知客户端请求方法不支持时响应报文
+ */
+void unimplemented(int client) {
+  char buf[1024];
+
+  // 报文状态行
+  sprintf(buf, "HTTP/1.1 501 Method Not Implement\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, SERVER_STRING);
+  send(client, buf, strlen(buf), 0);
+  // 报文首部行
+  sprintf(buf, "Content-Type: text/html\r\n");
+  send(client, buf, strlen(buf), 0);
+  // 报文空行
+  sprintf(buf, "\r\n");
+  send(client, buf, strlen(buf), 0);
+  // 报文实体
+  sprintf(buf, "<html><head><title>Method Not Implement\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "</title></head>\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "<body><p>HTTP Request Method Not Supported.\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "</p></body></html>/r/n");
+  send(client, buf, strlen(buf), 0);
+}
+
+void accept_request(int client) {
+  char buf[1024];
+  int numchars;
+  char method[255];
+  char url[255];
+  char path[512];
+  size_t i, j;
+  struct stat st;
+  int cgi = 0;
+  char *query_string;
+
+  numchars = get_line(client, buf, sizeof(buf));
+
+  // HTTP请求报文字段使用空格分割，第一行第一个字段表示请求方法
+  i = 0;
+  j = 0;
+  while(!isspace(buf[j]) && (i < sizeof(method) - 1)) {
+    method[i] = buf[j];
+    i++;
+    j++;
+  }
+  method[i] = '\0';
+
+  if(strcasecmp(method, "GET") && strcasecmp(method, "POST")) {
+    unimplemented(client);
+    return;
+  }
+
+  if(strcasecmp(method, "POST") == 0)
+    cgi = 1;
+
+  // 读取url
+  i = 0;
+  while(isspace(buf[j]) && (j < sizeof(buf)))
+    j++;
+  while(!isspace(buf[j]) && (i < sizeof(url) - 1) && (j < sizeof(buf))) {
+    url[i] = buf[j];
+    i++;
+    j++;
+  }
+  url[i] = '\0';
+
+  if(strcasecmp(method, "GET") == 0) {
+    query_string = url;
+    while((*query_string != '?') && (*query_string != '\0'))
+      query_string++;
+    if(*query_string == '?') {
+      cgi = 1;
+      *query_string = '\0';
+      query_string++;
+    }
+  }
+
+  /**
+   * struct stat {
+   *   dev_t         st_dev;       //文件的设备编号
+   *   ino_t         st_ino;       //节点
+   *   mode_t        st_mode;      //文件的类型和存取的权限
+   *   nlink_t       st_nlink;     //连到该文件的硬连接数目，刚建立的文件值为1
+   *   uid_t         st_uid;       //用户ID
+   *   gid_t         st_gid;       //组ID
+   *   dev_t         st_rdev;      //(设备类型)若此文件为设备文件，则为其设备编号
+   *   off_t         st_size;      //文件字节数(文件大小)
+   *   unsigned long st_blksize;   //块大小(文件系统的I/O 缓冲区大小)
+   *   unsigned long st_blocks;    //块数
+   *   time_t        st_atime;     //最后一次访问时间
+   *   time_t        st_mtime;     //最后一次修改时间
+   *   time_t        st_ctime;     //最后一次改变时间(指属性)
+   * };
+   */
+  sprintf(path, "htdocs%s", url);
+  if(path[strlen(path) - 1] == '/')
+    strcat(path, "index.html");
+  if(stat(path, &st) == -1) {
+    while ((numchars > 0) && strcmp("\n", buf))
+      numchars = get_line(client, buf, sizeof(buf));
+    not_found(client);
+  } else {
+    // 判断是不是文件夹
+    if((st.st_mode & S_IFMT) == S_IFDIR)
+      strcat(path, "/index.html");
+    if((st.st_mode & S_IXUSR) ||
+       (st.st_mode & S_IXGRP) ||
+       (st.st_mode & S_IXOTH))
+      cgi = 1;
+    if (!cgi)
+      serve_file(client, path);
+    else
+      execute_cgi(client, path, method, query_string);
+  }
+  
+  close(client);
 }
 
 int main() {
