@@ -11,9 +11,11 @@
 
 void error_die(const char*);
 int startup(u_short*);
-int get_line(int sock, char* buf, int size);
+int get_line(int, char*, int);
 void unimplemented(int);
 void not_found(int);
+void headers(int, const char*);
+void cat(int, FILE*);
 void serve_file(int, const char*);
 void execute_cgi(int, const char*, const char*, const char*);
 void accept_request(int);
@@ -133,6 +135,94 @@ void unimplemented(int client) {
   send(client, buf, strlen(buf), 0);
 }
 
+/**
+ * 文件不存在
+ */
+void not_found(int client) {
+  char buf[1024];
+
+  sprintf(buf, "HTTP/1.1 404 NOT FOUND\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, SERVER_STRING);
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "Content-Type: text/html\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "<html><head><title>NOT FOUND\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "</title></head>\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "<body><p>The server could not fulfill\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "your request because the resource specified\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "is unavailable or nonexisted.\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "</p></body></html>\r\n");
+  send(client, buf, strlen(buf), 0);
+}
+
+/**
+ * 返回读取的文件的头信息
+ */
+void headers(int client, const char* filename) {
+  char buf[1024];
+  (void)filename;
+
+  sprintf(buf, "HTTP/1.1 200 OK\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, SERVER_STRING);
+  send(client, buf, strlen(buf), 0);
+  // 可以根据filename返回类型
+  sprintf(buf, "Content-Type: text/html\r\n");
+  send(client, buf, strlen(buf), 0);
+  sprintf(buf, "\r\n");
+  send(client, buf, strlen(buf), 0);
+}
+
+/**
+ * 读取文件内容
+ */
+void cat(int client, FILE* resource) {
+  char buf[1024];
+
+  fgets(buf, sizeof(buf), resource);
+  while(!feof(resource)) {
+    send(client, buf, strlen(buf), 0);
+    fgets(buf, sizeof(buf), resource);
+  }
+}
+
+/**
+ * 发送普通文件至客户端
+ * 并向客户端报告错误
+ */
+void serve_file(int client, const char* filename) {
+  FILE* resource = NULL;
+  int numchars = 1;
+  char buf[1024];
+
+  // 读取并丢弃请求报文头部数据
+  buf[0] = 'A';
+  buf[1] = '\0';
+  while((numchars > 0) && (strcmp("\n",buf)))
+    numchars = get_line(client, buf, sizeof(buf));
+
+  resource = fopen(filename, "r");
+  if(resource == NULL)
+    not_found(client);
+  else {
+    headers(client, filename);
+    cat(client, resource);
+  }
+  fclose(resource);
+}
+
+void execute_cgi(int client, const char* path, const char* method, const char* query_string) {
+  
+}
+
 void accept_request(int client) {
   char buf[1024];
   int numchars;
@@ -158,6 +248,7 @@ void accept_request(int client) {
 
   if(strcasecmp(method, "GET") && strcasecmp(method, "POST")) {
     unimplemented(client);
+    close(client);
     return;
   }
 
@@ -214,6 +305,7 @@ void accept_request(int client) {
     // 判断是不是文件夹
     if((st.st_mode & S_IFMT) == S_IFDIR)
       strcat(path, "/index.html");
+    // 判断是否有执行权限
     if((st.st_mode & S_IXUSR) ||
        (st.st_mode & S_IXGRP) ||
        (st.st_mode & S_IXOTH))
@@ -241,11 +333,7 @@ int main() {
     client_sock = accept(server_sock, (struct sockaddr*)&client_name, &client_name_len);
     if(client_sock == -1)
       error_die("创建连接socket失败");
-    printf("%s\n", "success");
-    char buf[1024];
-    get_line(client_sock, buf, sizeof(buf));
-    printf("%s", buf);
-    close(client_sock);
+    accept_request(client_sock);
   }
   close(server_sock);
   return 0;
