@@ -310,7 +310,7 @@ void execute_cgi(int client, const char* path, const char* method, const char* q
     char query_env[255];
     char length_env[255];
 
-    // 重定向至终端
+    // 目标描述符（dup2函数的第二个参数）将变成源描述符（dup2函数的第一个参数）的复制品
     dup2(cgi_output[1], 1);
     dup2(cgi_input[0], 0);
     close(cgi_output[0]);
