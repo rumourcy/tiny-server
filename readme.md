@@ -12,5 +12,3 @@ It's a simple webserver. You can build a static website, or you can build a cgi 
 ![index](http://oanl5xf7d.bkt.clouddn.com/index.png)
 
 ![cgi](http://oanl5xf7d.bkt.clouddn.com/cgi.png)
-
-
